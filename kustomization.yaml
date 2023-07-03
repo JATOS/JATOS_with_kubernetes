@@ -1,0 +1,9 @@
+secretGenerator:
+- name: mysql-pass
+  literals:
+  - password=abc123
+- name: jatos-secret
+  literals:
+  - secret=my-secretly-secret-secret-is-very-secretly-not-secret
+resources:
+  - jatos.yaml

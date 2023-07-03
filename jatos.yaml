@@ -1,0 +1,137 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jatos
+  labels:
+    app: jatos
+  annotations:
+    kubernetes.digitalocean.com/load-balancer-id: "jatos-load-balancer"
+spec:
+  ports:
+    - port: 80
+      targetPort: 9000
+  selector:
+    app: jatos
+  type: LoadBalancer
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: jatos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: jatos
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 100
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jatos-data-pv-claim
+  labels:
+    app: jatos
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: nfs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jatos
+  labels:
+    app: jatos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jatos
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: jatos
+    spec:
+      containers:
+        # Maybe use a newer image version
+        - image: jatos/jatos:3.8.3
+          name: jatos
+          args:
+            # Necessary to run JATOS on multiple nodes
+            - -Djatos.multiNode=true
+            # Logging to stdout
+            - -Djatos.logs.appender=ASYNCSTDOUT
+            # Set the JVM maximum memory usage. It has to fit your machine.
+            - -J-Xmx=1500M
+          env:
+            # All nodes need the same JATOS secret, otherwise the session cookie used for authentication won't work. Set in kustomization.yaml.
+            - name: JATOS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jatos-secret
+                  key: secret
+            # MySQL's password. Set in kustomization.yaml.      
+            - name: JATOS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-pass
+                  key: password
+            # Change MySQL's IP/domain to yours
+            - name: JATOS_DB_URL
+              value: jdbc:mysql://1.2.3.4/jatos?characterEncoding=UTF-8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=UTC
+            - name: JATOS_DB_USERNAME
+              value: jatosuser
+            - name: JATOS_DB_DRIVER
+              value: com.mysql.cj.jdbc.Driver
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 9000
+            failureThreshold: 1
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: 9000
+            failureThreshold: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "900Mi"
+              cpu: "300m"
+          ports:
+            - containerPort: 9000
+          volumeMounts:
+            - name: jatos-data-storage
+              mountPath: /opt/jatos_data
+          securityContext:
+            allowPrivilegeEscalation: false
+      restartPolicy: Always
+      volumes:
+        - name: jatos-data-storage
+          persistentVolumeClaim:
+            claimName: jatos-data-pv-claim
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:                                 
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - topologyKey: kubernetes.io/hostname    
+            labelSelector:                               
+              matchLabels:                               
+                app: jatos
